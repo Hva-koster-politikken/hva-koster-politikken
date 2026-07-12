@@ -1,8 +1,10 @@
 import type { Party } from '../types'
 
 const amount = (value: number) => () => value
-const salaryRate = (rate: number) => (p: Parameters<Party['measures'][number]['effect']>[0]) => p.salary * rate
-const perChild = (value: number) => (p: Parameters<Party['measures'][number]['effect']>[0]) => p.children * value
+const salaryRate = (rate: number) => (p: Parameters<Party['measures'][number]['effect']>[0]) =>
+  (['worker', 'both', 'student', 'selfEmployed'].includes(p.incomeType) ? p.salary : 0) * rate
+const perChild = (value: number) => (p: Parameters<Party['measures'][number]['effect']>[0]) =>
+  (p.childrenUnder6 + p.children6to12 + p.children13to17) * value
 const fossilKm = (rate: number) => (p: Parameters<Party['measures'][number]['effect']>[0]) => p.carType === 'fossil' ? p.annualKm * rate : 0
 
 export const parties: Party[] = [
