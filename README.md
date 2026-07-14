@@ -1,8 +1,24 @@
 # Hva koster politikken?
 
-En åpen prototype som viser hvordan politiske prioriteringer kan påvirke privatøkonomien, og hvordan et beløp tilsvarende skatten din fordeles på offentlige formål.
+En åpen prototype som sammenligner hvordan dokumenterte politiske forslag kan påvirke privatøkonomien.
 
-> **Viktig:** Partiberegningene og budsjettfordelingen er foreløpig illustrerende demodata. De skal ikke tolkes som partienes faktiske politikk.
+## Dette beregnes nå
+
+- vedtatte norske skatteregler for 2026
+- personfradrag og minstefradrag
+- progressiv trinnskatt og trygdeavgift
+- renteutgifter og utvalgte standardfradrag
+- forenklet formuesskatt
+- konkrete skatteforslag fra de ni stortingspartiene
+- et tydelig merket estimat for Norgesdemokratene
+
+Dokumenterte partiforslag rangeres etter lavest beregnet skatt for brukerens profil. Partier som mangler nødvendige satser merkes **uavklart** og vises under den ordinære rangeringen.
+
+## Viktige avgrensninger
+
+Dette er en forenklet beregning, ikke skatteråd. Kommunale forskjeller, ektefellefordeling, tilfeldig utvalg i arbeidsfradragsforsøket for unge, detaljert utbytteskatt og forbruksavgifter er foreløpig ikke med.
+
+Budsjettfanen viser ikke lenger oppdiktede partiforskjeller. Partienes utgifter må først normaliseres fra alternative statsbudsjett til like kategorier.
 
 ## Kom i gang
 
@@ -18,13 +34,13 @@ npm test
 npm run build
 ```
 
-## Oppdatere data
+Kontrolltesten for en lønn på 130 000 kroner forventer 7 588 kroner i skatt etter vedtatte 2026-regler.
 
-- Partier og demotiltak ligger i `src/data/parties.ts`.
-- Fordelingen i skattekvitteringen ligger i `src/data/budget.ts`.
-- Beregningslogikken ligger i `src/lib/calculations.ts`.
+## Data og metode
 
-Før løsningen publiseres som faktagrunnlag må alle demotiltak erstattes med dokumenterte forslag fra partiprogrammer og alternative statsbudsjett. Hvert tiltak skal ha kilde, år, status og dato for kontroll.
+- Partienes regler og kilder ligger i `src/data/parties.ts`.
+- Vedtatte regler og beregningsmotor ligger i `src/lib/calculations.ts`.
+- Den foreløpige budsjettgrupperingen ligger i `src/data/budget.ts`.
 
 ## Personvern
 
@@ -32,4 +48,4 @@ Opplysningene behandles bare i nettleseren. Prototypen sender ikke økonomiske d
 
 ## Publisering
 
-Workflowen i `.github/workflows/deploy.yml` bygger og publiserer `main` automatisk til GitHub Pages. I repoets innstillinger må **Settings → Pages → Source** settes til **GitHub Actions**.
+Workflowen i `.github/workflows/main.yml` bygger og publiserer `main` automatisk til GitHub Pages. I repoets innstillinger må **Settings → Pages → Source** være satt til **GitHub Actions**.
