@@ -1,7 +1,6 @@
 export type IncomeType =
   | 'worker'
   | 'pensioner'
-  | 'both'
   | 'disabled'
   | 'youngDisabled'
   | 'aap'
@@ -9,21 +8,34 @@ export type IncomeType =
   | 'unemployed'
   | 'selfEmployed'
 
+export type RentalTaxMode = 'none' | 'taxFree' | 'privateTaxable' | 'business' | 'uncertain'
+export type CivilStatus = 'single' | 'joint'
+
 export type UserProfile = {
   age: number
   municipality: string
-  incomeType: IncomeType
+  civilStatus: CivilStatus
+  incomeTypes: IncomeType[]
   salary: number
+  selfEmployedIncome: number
   pensionIncome: number
   benefitIncome: number
   otherIncome: number
+  rentalTaxMode: RentalTaxMode
   rentalIncome: number
+  rentalMaintenance: number
+  rentalOperatingCosts: number
+  rentalImprovements: number
   debt: number
   interestExpenses: number
   homeValue: number
   ownershipShare: number
+  secondaryHomeValue: number
+  holidayHomeValue: number
   bankSavings: number
   shares: number
+  businessAssets: number
+  otherWealth: number
   childrenUnder6: number
   children6to12: number
   children13to17: number
@@ -32,13 +44,12 @@ export type UserProfile = {
   singleParent: boolean
   supportNeeds: string[]
   deductionSelections: string[]
-  rentalMaintenance: number
-  rentalOperatingCosts: number
   unionFee: number
   childcareExpenses: number
   commuteExpenses: number
   donations: number
   investmentLosses: number
+  ipsContribution: number
   carType: 'none' | 'fossil' | 'electric'
   annualKm: number
   tolls: number
@@ -71,11 +82,21 @@ export type TaxRules = {
   extraPensionTaxCredit?: number
   childcareFirstChildMax: number
   childcareAdditionalChildMax: number
+  ipsDeductionMax: number
   wealthAllowance: number
   wealthSecondThreshold: number
+  wealthThirdThreshold?: number
   wealthRate: number
   wealthSecondRate: number
+  wealthThirdRate?: number
+  primaryHomeLowValuationRate: number
+  primaryHomeHighThreshold: number
+  primaryHomeHighValuationRate: number
+  secondaryHomeValuationRate: number
+  holidayHomeValuationRate: number
   shareValuationRate: number
+  businessAssetValuationRate: number
+  otherWealthValuationRate: number
 }
 
 export type PartyStatus = 'documented' | 'unclear'
@@ -103,10 +124,13 @@ export type Party = {
 
 export type TaxBreakdown = {
   grossIncome: number
+  netRentalIncome: number
+  rentalTaxEffect: number
   taxableOrdinaryIncome: number
   ordinaryIncomeTax: number
   bracketTax: number
   socialSecurity: number
+  taxableWealth: number
   wealthTax: number
   taxCredits: number
   total: number

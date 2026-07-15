@@ -7,18 +7,22 @@ En åpen prototype som sammenligner hvordan dokumenterte politiske forslag kan p
 - vedtatte norske skatteregler for 2026
 - personfradrag og minstefradrag
 - progressiv trinnskatt og trygdeavgift
+- samtidige inntekter fra lønn, ENK, pensjon og NAV-ytelser
+- skattefri, privat skattepliktig og næringsmessig utleie
+- vedlikehold, driftskostnader og fradragsberettiget utleieunderskudd
 - renteutgifter og utvalgte standardfradrag
-- forenklet formuesskatt
+- forenklet formuesskatt med egne verdier for primærbolig, sekundærbolig, aksjer og driftsmidler
 - konkrete skatteforslag fra de ni stortingspartiene
 - et tydelig merket estimat for Norgesdemokratene
+- forenklet budsjettfordeling for alle partier, med dagens budsjett som indeks 100
 
 Dokumenterte partiforslag rangeres etter lavest beregnet skatt for brukerens profil. Partier som mangler nødvendige satser merkes **uavklart** og vises under den ordinære rangeringen.
 
 ## Viktige avgrensninger
 
-Dette er en forenklet beregning, ikke skatteråd. Kommunale forskjeller, ektefellefordeling, tilfeldig utvalg i arbeidsfradragsforsøket for unge, detaljert utbytteskatt og forbruksavgifter er foreløpig ikke med.
+Dette er en forenklet beregning, ikke skatteråd. Kommunale forskjeller, detaljert ektefellefordeling, tilfeldig utvalg i arbeidsfradragsforsøket for unge, detaljert utbytteskatt og forbruksavgifter er foreløpig ikke med.
 
-Budsjettfanen viser ikke lenger oppdiktede partiforskjeller. Partienes utgifter må først normaliseres fra alternative statsbudsjett til like kategorier.
+Budsjettfanen skiller mellom partienes konkrete årsbudsjett og langsiktige program. Utgiftene er normalisert til elleve felles kategorier og merkes som en forenklet retningsmodell. En egen totalindeks gjør synlig om partiet anslås å ville ha et større eller mindre budsjett enn dagens.
 
 ## Kom i gang
 
@@ -40,7 +44,7 @@ Kontrolltesten for en lønn på 130 000 kroner forventer 7 588 kroner i skatt et
 
 - Partienes regler og kilder ligger i `src/data/parties.ts`.
 - Vedtatte regler og beregningsmotor ligger i `src/lib/calculations.ts`.
-- Den foreløpige budsjettgrupperingen ligger i `src/data/budget.ts`.
+- Budsjettgruppering, kilder, usikkerhet og langsiktige programmål ligger i `src/data/budget.ts`.
 
 ## Personvern
 

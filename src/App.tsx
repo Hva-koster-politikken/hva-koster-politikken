@@ -14,16 +14,18 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { parties } from './data/parties'
-import { currentBudget, getBudgetScenario } from './data/budget'
+import { budgetShare, budgetTotal, currentBudget, getBudgetScenario } from './data/budget'
 import {
+  calculateRentalAlternatives,
   calculateTax,
   defaultProfile,
   kr,
   numberWithSpaces,
   profileIncomes,
+  rentalResult,
   sortPartyResults,
 } from './lib/calculations'
-import type { PartyResult, UserProfile } from './types'
+import type { IncomeType, PartyResult, RentalTaxMode, UserProfile } from './types'
 
 type View = 'home' | 'form' | 'results' | 'receipt' | 'method'
 
@@ -70,8 +72,6 @@ const supportOptions = [
 ] as const
 
 const deductionOptions = [
-  ['rentalMaintenance', 'Vedlikehold av skattepliktig utleie'],
-  ['rentalOperating', 'Driftskostnader ved utleie'],
   ['union', 'Fagforeningskontingent'],
   ['childcare', 'Pass og stell av barn'],
   ['commute', 'Reise eller pendling til arbeid'],
@@ -80,19 +80,27 @@ const deductionOptions = [
   ['ips', 'Individuell pensjonssparing (IPS)'],
 ] as const
 
-const incomeStatusOptions: readonly (readonly [UserProfile['incomeType'], string])[] = [
+const incomeStatusOptions: readonly (readonly [IncomeType, string])[] = [
   ['worker', 'Arbeidstaker'],
+  ['selfEmployed', 'ENK / selvstendig'],
   ['pensioner', 'Pensjonist'],
-  ['both', 'Jobb + pensjon'],
   ['disabled', 'Uføretrygdet'],
   ['youngDisabled', 'Ung ufør'],
   ['aap', 'AAP'],
   ['student', 'Student'],
   ['unemployed', 'Arbeidsledig'],
-  ['selfEmployed', 'Selvstendig næringsdrivende'],
 ]
 
-const incomeStatusLabel = Object.fromEntries(incomeStatusOptions) as Record<UserProfile['incomeType'], string>
+const rentalOptions: readonly (readonly [RentalTaxMode, string, string])[] = [
+  ['none', 'Ingen utleie', 'Ingen leieinntekt føres i beregningen.'],
+  ['taxFree', 'Skattefri utleie', 'Leieinntekten vises i profilen, men skattlegges ikke.'],
+  ['privateTaxable', 'Skattepliktig privat utleie', 'Overskudd skattlegges normalt med 22 %. Underskudd kan gi fradrag.'],
+  ['business', 'Utleie som næring', 'Overskudd behandles som næringsinntekt og kan få trinnskatt og trygdeavgift.'],
+  ['uncertain', 'Usikker', 'Privat utleie brukes i rangeringen, og begge alternativer vises i resultatet.'],
+]
+
+const incomeStatusLabel = Object.fromEntries(incomeStatusOptions) as Record<IncomeType, string>
+const supportLabel = Object.fromEntries(supportOptions) as Record<string, string>
 const formatPercent = (value: number) => `${new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 1 }).format(value)} %`
 
 const ChoiceGrid = ({
@@ -132,12 +140,22 @@ function App() {
   const documentedResults = results.filter(result => result.status === 'documented')
   const unclearResults = results.filter(result => result.status === 'unclear')
   const baselineTax = calculateTax(profile)
+  const rentalAlternatives = calculateRentalAlternatives(profile)
   const bestResult = documentedResults[0]
   const income = profileIncomes(profile)
-  const profileIncome = income.wage + income.selfEmployedIncome + income.pension + income.benefit + income.other + income.rental
+  const profileIncome = income.wage + income.selfEmployedIncome + income.pension + income.benefit + income.other +
+    (profile.rentalTaxMode === 'none' ? 0 : income.rental)
   const childrenCount = profile.childrenUnder6 + profile.children6to12 + profile.children13to17
   const selectedBudget = getBudgetScenario(budgetPartyId)
-  const selectedParty = parties.find(party => party.id === budgetPartyId)
+  const selectedBudgetTotal = budgetTotal(selectedBudget)
+  const selectedPartyResult = results.find(result => result.party.id === budgetPartyId)
+  const receiptTax = budgetPartyId === 'current' ? baselineTax : selectedPartyResult?.tax ?? baselineTax
+  const selectedStatuses = profile.incomeTypes.length > 0
+    ? profile.incomeTypes.map(type => incomeStatusLabel[type].toLowerCase()).join(' + ')
+    : 'ingen valgt inntektstype'
+  const selectedSupportLabels = profile.supportNeeds.map(id => supportLabel[id]).filter(Boolean)
+  const taxableRental = ['privateTaxable', 'business', 'uncertain'].includes(profile.rentalTaxMode)
+  const netRental = rentalResult(profile)
 
   const update = <K extends keyof UserProfile>(key: K, value: UserProfile[K]) =>
     setProfile(previous => ({ ...previous, [key]: value }))
@@ -148,6 +166,12 @@ function App() {
         ? previous[key].filter(item => item !== id)
         : [...previous[key], id],
     }))
+  const toggleIncome = (id: string) => setProfile(previous => ({
+    ...previous,
+    incomeTypes: previous.incomeTypes.includes(id as IncomeType)
+      ? previous.incomeTypes.filter(item => item !== id)
+      : [...previous.incomeTypes, id as IncomeType],
+  }))
   const navigate = (next: View) => {
     setView(next)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -155,59 +179,81 @@ function App() {
 
   const steps = [
     {
-      title: 'Deg og inntekten din',
-      hint: 'Beløp vises med mellomrom, for eksempel 750 000.',
+      title: 'Deg og inntektene dine',
+      hint: 'Velg alle situasjoner som gjelder. Beløp vises med mellomrom, for eksempel 750 000.',
       content: <>
         <div className="grid-2">
           <NumberField label="Alder" value={profile.age} suffix="år" grouped={false} onChange={value => update('age', value)} />
           <label className="field"><span>Bostedskommune</span><input value={profile.municipality} onChange={event => update('municipality', event.target.value)} /></label>
         </div>
-        <div className="section-label">Hva beskriver deg best?</div>
-        <div className="income-options" role="radiogroup" aria-label="Hovedsituasjon">
-          {incomeStatusOptions.map(([id, label]) => <button
-            type="button"
-            role="radio"
-            aria-checked={profile.incomeType === id}
-            key={id}
-            className={profile.incomeType === id ? 'active' : ''}
-            onClick={() => update('incomeType', id)}
-          >{profile.incomeType === id && <Check size={14} />}{label}</button>)}
-        </div>
+        <label className="field"><span>Formue skattlegges som</span><select value={profile.civilStatus} onChange={event => update('civilStatus', event.target.value as UserProfile['civilStatus'])}><option value="single">Enslig</option><option value="joint">Ektefeller / skattlegges samlet</option></select></label>
+        <div className="section-label">Velg alle som beskriver deg</div>
+        <ChoiceGrid options={incomeStatusOptions} selected={profile.incomeTypes} onToggle={toggleIncome} />
         <div className="grid-2">
-          {['worker', 'both', 'student', 'selfEmployed'].includes(profile.incomeType) && <NumberField
-            label={profile.incomeType === 'selfEmployed' ? 'Årlig næringsinntekt' : 'Brutto årslønn'}
-            value={profile.salary}
-            onChange={value => update('salary', value)}
-          />}
-          {['pensioner', 'both'].includes(profile.incomeType) && <NumberField label="Årlig pensjonsinntekt" value={profile.pensionIncome} onChange={value => update('pensionIncome', value)} />}
-          {['disabled', 'youngDisabled', 'aap', 'unemployed'].includes(profile.incomeType) && <NumberField label="Årlige skattepliktige ytelser" value={profile.benefitIncome} onChange={value => update('benefitIncome', value)} />}
+          {profile.incomeTypes.includes('worker') && <NumberField label="Brutto årslønn" value={profile.salary} onChange={value => update('salary', value)} />}
+          {profile.incomeTypes.includes('selfEmployed') && <NumberField label="Årlig næringsinntekt fra ENK" value={profile.selfEmployedIncome} onChange={value => update('selfEmployedIncome', value)} />}
+          {profile.incomeTypes.includes('pensioner') && <NumberField label="Årlig pensjonsinntekt" value={profile.pensionIncome} onChange={value => update('pensionIncome', value)} />}
+          {profile.incomeTypes.some(type => ['disabled', 'youngDisabled', 'aap', 'unemployed'].includes(type)) && <NumberField label="Årlige skattepliktige NAV-ytelser" value={profile.benefitIncome} onChange={value => update('benefitIncome', value)} />}
           <NumberField label="Annen skattepliktig inntekt" value={profile.otherIncome} onChange={value => update('otherIncome', value)} />
         </div>
-        <NumberField label="Årlig skattepliktig utleieinntekt før kostnader" value={profile.rentalIncome} onChange={value => update('rentalIncome', value)} />
-        <p className="field-help">Ta bare med utleie som er skattepliktig. Vedlikehold og driftskostnader kan føres senere i skjemaet.</p>
+        <p className="field-help">Lønn, næringsinntekt, pensjon og ytelser beregnes som egne inntektstyper. Du kan for eksempel kombinere 500 000 kr i lønn med 125 000 kr fra ENK.</p>
+      </>,
+    },
+    {
+      title: 'Utleie',
+      hint: 'Velg først om utleien er skattefri, privat skattepliktig eller næringsvirksomhet.',
+      content: <>
+        <div className="rental-options" role="radiogroup" aria-label="Skatt på utleie">
+          {rentalOptions.map(([id, label, description]) => <button
+            type="button"
+            role="radio"
+            aria-checked={profile.rentalTaxMode === id}
+            key={id}
+            className={profile.rentalTaxMode === id ? 'active' : ''}
+            onClick={() => update('rentalTaxMode', id)}
+          ><span>{profile.rentalTaxMode === id && <Check size={14} />}</span><div><b>{label}</b><small>{description}</small></div></button>)}
+        </div>
+        {profile.rentalTaxMode !== 'none' && <NumberField label="Brutto leieinntekter før kostnader" value={profile.rentalIncome} onChange={value => update('rentalIncome', value)} />}
+        {taxableRental && <>
+          <div className="grid-2">
+            <NumberField label="Fradragsberettiget vedlikehold" value={profile.rentalMaintenance} onChange={value => update('rentalMaintenance', value)} />
+            <NumberField label="Andre fradragsberettigede driftskostnader" value={profile.rentalOperatingCosts} onChange={value => update('rentalOperatingCosts', value)} />
+          </div>
+          <NumberField label="Påkostning / standardheving (ikke direkte fradrag)" value={profile.rentalImprovements} onChange={value => update('rentalImprovements', value)} />
+          <div className="rental-preview"><span>Beregnet skattepliktig resultat</span><strong className={netRental < 0 ? 'rental-loss' : ''}>{kr(netRental)}</strong><small>{netRental < 0 ? 'Underskudd reduserer alminnelig inntekt i den forenklede modellen.' : 'Brutto leie minus vedlikehold og driftskostnader.'}</small></div>
+        </>}
+        {profile.rentalTaxMode === 'taxFree' && <div className="info-box"><strong>Skattefri utleie</strong><p>Beløpet vises som del av profilen, men påvirker ikke skatt eller partirangering.</p></div>}
+        {profile.rentalTaxMode === 'uncertain' && <div className="warning-box"><strong>Begge alternativer vises senere</strong><p>Privat skattepliktig utleie brukes i hovedrangeringen. Resultatsiden viser også hva samme profil gir dersom utleien behandles som næring.</p></div>}
       </>,
     },
     {
       title: 'Bolig og gjeld',
-      hint: 'Gjeld påvirker formuesskatt, mens betalte renter gir inntektsfradrag.',
+      hint: 'Primærbolig og sekundærbolig verdsettes forskjellig i formuesskatten.',
       content: <>
         <div className="grid-2">
-          <NumberField label="Markedsverdi på bolig" value={profile.homeValue} onChange={value => update('homeValue', value)} />
-          <NumberField label="Din eierandel" value={profile.ownershipShare} suffix="%" grouped={false} onChange={value => update('ownershipShare', Math.min(100, value))} />
+          <NumberField label="Markedsverdi på primærbolig" value={profile.homeValue} onChange={value => update('homeValue', value)} />
+          <NumberField label="Din eierandel i primærboligen" value={profile.ownershipShare} suffix="%" grouped={false} onChange={value => update('ownershipShare', Math.min(100, value))} />
+        </div>
+        <div className="grid-2">
+          <NumberField label="Din andel av sekundær-/utleieboliger" value={profile.secondaryHomeValue} onChange={value => update('secondaryHomeValue', value)} />
+          <NumberField label="Anslått verdi på fritidsbolig" value={profile.holidayHomeValue} onChange={value => update('holidayHomeValue', value)} />
         </div>
         <div className="grid-2">
           <NumberField label="Samlet gjeld" value={profile.debt} onChange={value => update('debt', value)} />
           <NumberField label="Årlige renteutgifter" value={profile.interestExpenses} onChange={value => update('interestExpenses', value)} />
         </div>
+        <p className="field-help">Skriv markedsverdi, ikke formuesverdi. Appen bruker deretter partiets verdsettelsesregler. Gjeld trekkes forenklet fra samlet skattemessig formue.</p>
       </>,
     },
     {
       title: 'Formue og barn',
-      hint: 'Barnets alder og antall barn kan påvirke fradrag og støtteordninger.',
+      hint: 'Formuen vises som egen del av partisammenligningen.',
       content: <>
         <div className="grid-2">
           <NumberField label="Bankinnskudd" value={profile.bankSavings} onChange={value => update('bankSavings', value)} />
           <NumberField label="Aksjer og fond" value={profile.shares} onChange={value => update('shares', value)} />
+          <NumberField label="Verdier i ENK / driftsmidler" value={profile.businessAssets} onChange={value => update('businessAssets', value)} />
+          <NumberField label="Annen skattepliktig formue" value={profile.otherWealth} onChange={value => update('otherWealth', value)} />
         </div>
         <div className="section-label">Barn under 18 år</div>
         <div className="grid-3">
@@ -229,27 +275,26 @@ function App() {
       hint: 'Velg områdene som er relevante for deg eller husstanden.',
       content: <>
         <ChoiceGrid options={supportOptions} selected={profile.supportNeeds} onToggle={id => toggleList('supportNeeds', id)} />
-        <div className="info-box"><strong>Vises som relevante områder</strong><p>Vi regner bare inn ytelser når partiets beløp, vilkår og virkning for profilen er dokumentert. Resten påvirker ikke rangeringen ennå.</p></div>
+        <div className="info-box"><strong>Vises som relevante områder</strong><p>Briller, hjelpemidler, tolk, tannhelse og andre tjenester påvirker bare kroneberegningen når et parti har oppgitt beløp og vilkår som kan knyttes til profilen. Ellers vises de som politisk relevant informasjon.</p></div>
       </>,
     },
     {
-      title: 'Fradrag og kostnader',
-      hint: 'Velg bare fradrag du faktisk mener gjelder for deg.',
+      title: 'Andre fradrag',
+      hint: 'Utleiekostnadene er allerede ført i eget steg. Velg andre fradrag som gjelder for deg.',
       content: <>
         <ChoiceGrid options={deductionOptions} selected={profile.deductionSelections} onToggle={id => toggleList('deductionSelections', id)} />
-        {profile.deductionSelections.includes('rentalMaintenance') && <NumberField label="Vedlikeholdskostnader på skattepliktig utleie" value={profile.rentalMaintenance} onChange={value => update('rentalMaintenance', value)} />}
-        {profile.deductionSelections.includes('rentalOperating') && <NumberField label="Andre driftskostnader ved skattepliktig utleie" value={profile.rentalOperatingCosts} onChange={value => update('rentalOperatingCosts', value)} />}
         {profile.deductionSelections.includes('union') && <NumberField label="Betalt fagforeningskontingent" value={profile.unionFee} onChange={value => update('unionFee', value)} />}
         {profile.deductionSelections.includes('childcare') && <NumberField label="Utgifter til pass og stell av barn" value={profile.childcareExpenses} onChange={value => update('childcareExpenses', value)} />}
         {profile.deductionSelections.includes('commute') && <NumberField label="Beregnet reisebeløp før egenandel" value={profile.commuteExpenses} onChange={value => update('commuteExpenses', value)} />}
         {profile.deductionSelections.includes('donations') && <NumberField label="Gaver til godkjente organisasjoner" value={profile.donations} onChange={value => update('donations', value)} />}
         {profile.deductionSelections.includes('investmentLoss') && <NumberField label="Realisert tap på aksjer eller fond" value={profile.investmentLosses} onChange={value => update('investmentLosses', value)} />}
-        <div className="warning-box"><strong>Forenklet beregning – ikke skatteråd</strong><p>Appen bruker vedtatte grenser der de finnes. Særlige regler, ektefellefordeling og dokumentasjonskrav kan gi et annet resultat i skattemeldingen.</p></div>
+        {profile.deductionSelections.includes('ips') && <NumberField label="Innbetalt til IPS" value={profile.ipsContribution} onChange={value => update('ipsContribution', value)} />}
+        <div className="warning-box"><strong>Forenklet beregning – ikke skatteråd</strong><p>Særlige regler, dokumentasjonskrav, kommunale variasjoner og fordeling mellom ektefeller kan gi et annet resultat i skattemeldingen.</p></div>
       </>,
     },
     {
       title: 'Bil og transport',
-      hint: 'Disse opplysningene lagres til avgiftsdelen, men påvirker ikke skatterangeringen ennå.',
+      hint: 'Opplysningene brukes til å vise relevante avgiftsområder, men er foreløpig ikke satt til en oppdiktet kroneverdi.',
       content: <>
         <label className="field"><span>Biltype</span><select value={profile.carType} onChange={event => update('carType', event.target.value as UserProfile['carType'])}><option value="none">Ingen bil</option><option value="fossil">Bensin eller diesel</option><option value="electric">Elbil</option></select></label>
         <div className="grid-2">
@@ -265,15 +310,18 @@ function App() {
     <div className="party-logo" style={{ background: result.party.color }}>{result.party.shortName}</div>
     <div className="party-name">
       <h3>{result.party.name}</h3>
-      <span>{result.status === 'documented' ? 'Dokumentert beregning' : 'Uavklart – estimat, ikke rangert'}</span>
+      <span>{result.status === 'documented' ? 'Konkret 2026-forslag' : 'Uavklart – tydelig merket estimat'}</span>
     </div>
     <div className="effect"><Difference result={result} /><span>per måned mot dagens regler</span></div>
     <details>
       <summary><ChevronDown /> Se beregning og kilde</summary>
       <div className="tax-breakdown">
-        <div><span>Skatt med forslaget</span><b>{kr(result.tax.total)}</b></div>
+        <div><span>Samlet skatt</span><b>{kr(result.tax.total)}</b></div>
         <div><span>Dagens skatt</span><b>{kr(baselineTax.total)}</b></div>
         <div><span>Forskjell per år</span><Difference result={result} annual /></div>
+        <div><span>Formuesskatt</span><b>{kr(result.tax.wealthTax)}</b></div>
+        {taxableRental && <div><span>Utleieresultat</span><b>{kr(result.tax.netRentalIncome)}</b></div>}
+        {taxableRental && <div><span>Skatteeffekt av utleie</span><b>{result.tax.rentalTaxEffect > 0 ? '+' : ''}{kr(result.tax.rentalTaxEffect)}</b></div>}
         {result.estimateRange && <div><span>Mulig skatteintervall</span><b>{kr(result.estimateRange.minimumTax)}–{kr(result.estimateRange.maximumTax)}</b></div>}
       </div>
       {result.party.statusReason && <div className="unclear-reason"><AlertTriangle size={16} /><span>{result.party.statusReason}</span></div>}
@@ -287,20 +335,20 @@ function App() {
       <button className="brand" onClick={() => navigate('home')}><span><Landmark size={21} /></span>Hva koster politikken?</button>
       <nav><button onClick={() => navigate('results')}>Partier</button><button onClick={() => navigate('receipt')}>Skattekvittering</button><button onClick={() => navigate('method')}>Metode</button></nav>
     </header>
-    <div className="data-banner"><strong>Skatt oppdatert for 2026</strong><span> · Partitall har kilder, og uavklarte estimater rangeres ikke.</span></div>
+    <div className="data-banner"><strong>Skatt oppdatert for 2026</strong><span> · Konkrete forslag og anslag merkes forskjellig.</span></div>
 
     <main>
       {view === 'home' && <>
         <section className="hero">
-          <div><span className="eyebrow">Politikk oversatt til kroner</span><h1>Hva betyr politikken<br /><i>for din lommebok?</i></h1><p>Fyll inn noen enkle opplysninger. Se beregnet skatt etter vedtatte 2026-regler og sammenlign dokumenterte partiforslag.</p><button className="primary" onClick={() => navigate('form')}>Start beregningen <ArrowRight size={18} /></button><div className="trust"><span><LockKeyhole size={16} />Ingen innlogging</span><span><ShieldCheck size={16} />Data blir i nettleseren</span></div></div>
-          <div className="hero-card"><div className="mini-label">Eksempelprofilen på forsiden</div><h3>Best for lommeboken</h3><div className="big-number">{bestResult ? kr(bestResult.monthlyDifference) : '–'} <small>/ mnd.</small></div><div className="mini-bars">{documentedResults.slice(0, 4).map((result, index) => <div key={result.party.id}><span>{result.party.shortName}</span><b style={{ width: `${92 - index * 14}%`, background: result.party.color }} /></div>)}</div><small className="verified-pill">DOKUMENTERTE 2026-TALL</small></div>
+          <div><span className="eyebrow">Politikk oversatt til kroner</span><h1>Hva betyr politikken<br /><i>for din lommebok?</i></h1><p>Legg inn flere inntekter, utleie, bolig, gjeld og formue. Se hva partienes konkrete 2026-forslag kan bety for deg.</p><button className="primary" onClick={() => navigate('form')}>Start beregningen <ArrowRight size={18} /></button><div className="trust"><span><LockKeyhole size={16} />Ingen innlogging</span><span><ShieldCheck size={16} />Data blir i nettleseren</span></div></div>
+          <div className="hero-card"><div className="mini-label">Eksempelprofilen på forsiden</div><h3>Best for lommeboken</h3><div className="big-number">{bestResult ? kr(bestResult.monthlyDifference) : '–'} <small>/ mnd.</small></div><div className="mini-bars">{documentedResults.slice(0, 4).map((result, index) => <div key={result.party.id}><span>{result.party.shortName}</span><b style={{ width: `${92 - index * 14}%`, background: result.party.color }} /></div>)}</div><small className="verified-pill">KONKRETE 2026-FORSLAG</small></div>
         </section>
         <section className="feature-grid">
-          <button onClick={() => navigate('form')}><span><Calculator /></span><h3>Beregn din økonomi</h3><p>Progressiv skatt, bunnfradrag, minstefradrag og trygdeavgift.</p><ArrowRight /></button>
-          <button onClick={() => navigate('results')}><span><BarChart3 /></span><h3>Best for lommeboken</h3><p>Partiene rangeres etter beregnet skatt for akkurat din profil.</p><ArrowRight /></button>
-          <button onClick={() => navigate('receipt')}><span><ReceiptText /></span><h3>Se hvor pengene går</h3><p>Budsjettfordelingen holdes adskilt fra skatterangeringen.</p><ArrowRight /></button>
+          <button onClick={() => navigate('form')}><span><Calculator /></span><h3>Beregn din økonomi</h3><p>Flere inntekter, utleie, progressive skatter, fradrag og formue.</p><ArrowRight /></button>
+          <button onClick={() => navigate('results')}><span><BarChart3 /></span><h3>Best for lommeboken</h3><p>Lavest beregnet skatt kommer øverst. Det betyr ikke «beste parti».</p><ArrowRight /></button>
+          <button onClick={() => navigate('receipt')}><span><ReceiptText /></span><h3>Skattekvittering</h3><p>Se anslått budsjettstørrelse, fordeling i prosent og din andel i kroner.</p><ArrowRight /></button>
         </section>
-        <section className="principles"><span className="eyebrow">Bygget for tillit</span><h2>Ingen skjulte demotall</h2><p>Alle partiberegninger kan spores til et program eller alternativt statsbudsjett. Mangler en nødvendig sats, blir resultatet merket og flyttet ut av rangeringen.</p><div><span><Check /> Kilde på hvert parti</span><span><Check /> Samme beregningsmetode</span><span><Check /> Uavklart betyr uavklart</span></div></section>
+        <section className="principles"><span className="eyebrow">Bygget for tillit</span><h2>Samme metode for alle</h2><p>Partier med konkrete tall beregnes først. Uavklarte anslag merkes tydelig og plasseres under den dokumenterte rangeringen.</p><div><span><Check /> Kilde på hvert parti</span><span><Check /> Progressiv beregning</span><span><Check /> Anslag merkes</span></div></section>
       </>}
 
       {view === 'form' && <section className="form-page">
@@ -310,27 +358,33 @@ function App() {
       </section>}
 
       {view === 'results' && <section className="results-page">
-        <div className="page-heading"><span className="eyebrow">Din partisammenligning</span><h1>Best for lommeboken</h1><p>Dette betyr lavest beregnet skatt og høyest dokumentert lommebokeffekt – ikke «beste parti».</p></div>
-        <div className="result-summary"><div><span>Mest igjen blant dokumenterte forslag</span><h2>{bestResult?.party.name ?? '–'}</h2><p>{bestResult && <><Difference result={bestResult} /> per måned mot dagens regler</>}</p></div><div className="profile-chip">Profil: {profile.age} år · {incomeStatusLabel[profile.incomeType].toLowerCase()} · {kr(profileIncome)} i inntekt · {childrenCount} barn<button onClick={() => navigate('form')}>Endre</button></div></div>
-        <div className="baseline-card"><div><span>Dagens beregnede skatt</span><strong>{kr(baselineTax.total)}</strong></div><div><span>Alminnelig inntektsskatt</span><b>{kr(baselineTax.ordinaryIncomeTax)}</b></div><div><span>Trinnskatt</span><b>{kr(baselineTax.bracketTax)}</b></div><div><span>Trygdeavgift</span><b>{kr(baselineTax.socialSecurity)}</b></div><div><span>Formuesskatt</span><b>{kr(baselineTax.wealthTax)}</b></div></div>
-        <div className="scope-note"><ShieldCheck size={18} /><p><strong>Rangeringen gjelder det vi kan beregne.</strong> Skatt, valgte fradrag og konkrete skattefradrag er med. Generelle løfter, offentlige tjenester og avgiftsendringer uten nok profilinformasjon er ikke gitt oppdiktede kroneverdier.</p></div>
+        <div className="page-heading"><span className="eyebrow">Din partisammenligning</span><h1>Best for lommeboken</h1><p>Dette betyr lavest beregnet skatt for profilen – ikke hvilket parti som er best totalt sett.</p></div>
+        <div className="result-summary"><div><span>Mest igjen blant konkrete forslag</span><h2>{bestResult?.party.name ?? '–'}</h2><p>{bestResult && <><Difference result={bestResult} /> per måned mot dagens regler</>}</p></div><div className="profile-chip">Profil: {profile.age} år · {selectedStatuses} · {kr(profileIncome)} i brutto inntekter · {childrenCount} barn<button onClick={() => navigate('form')}>Endre</button></div></div>
+        <div className="baseline-card"><div><span>Dagens beregnede skatt</span><strong>{kr(baselineTax.total)}</strong></div><div><span>Alminnelig inntektsskatt</span><b>{kr(baselineTax.ordinaryIncomeTax)}</b></div><div><span>Trinnskatt</span><b>{kr(baselineTax.bracketTax)}</b></div><div><span>Trygdeavgift</span><b>{kr(baselineTax.socialSecurity)}</b></div><div><span>Formuesskatt</span><b>{kr(baselineTax.wealthTax)}</b></div>{taxableRental && <div><span>Skatteeffekt av utleie</span><b>{baselineTax.rentalTaxEffect > 0 ? '+' : ''}{kr(baselineTax.rentalTaxEffect)}</b></div>}</div>
+        <div className="wealth-summary"><div><span>Forenklet skattemessig nettoformue</span><strong>{kr(baselineTax.taxableWealth)}</strong></div><div><span>Dagens formuesskatt</span><strong>{kr(baselineTax.wealthTax)}</strong></div><p>Primærbolig, sekundærbolig, aksjer, driftsmidler og gjeld verdsettes forskjellig. Åpne hvert parti for å se partiets beregnede formuesskatt.</p></div>
+        {taxableRental && <div className="rental-result-card"><div><span>Brutto leie</span><b>{kr(profile.rentalIncome)}</b></div><div><span>Fradragskostnader</span><b>{kr(profile.rentalMaintenance + profile.rentalOperatingCosts)}</b></div><div><span>Skattepliktig resultat</span><b>{kr(netRental)}</b></div><div><span>Skatteeffekt</span><b>{baselineTax.rentalTaxEffect > 0 ? '+' : ''}{kr(baselineTax.rentalTaxEffect)}</b></div></div>}
+        {profile.rentalTaxMode === 'uncertain' && <div className="uncertain-rental"><AlertTriangle /><div><strong>Utleien er merket «usikker»</strong><p>Privat utleie gir beregnet skatt på {kr(rentalAlternatives.privateTaxable.total)}. Behandling som næring gir {kr(rentalAlternatives.business.total)}. Partirangeringen bruker privat utleie som hovedestimat.</p></div></div>}
+        {selectedSupportLabels.length > 0 && <div className="selected-services"><strong>Tjenester som er relevante for profilen</strong><div>{selectedSupportLabels.map(label => <span key={label}>{label}</span>)}</div><p>Disse vises som relevante politikkområder, men påvirker bare kronebeløpet når et konkret forslag kan knyttes til profilen.</p></div>}
+        <div className="scope-note"><ShieldCheck size={18} /><p><strong>Rangeringen gjelder det vi kan beregne.</strong> Skatt, formue, utleie og valgte fradrag er med. Tjenester og avgifter uten et dokumentert beløp for profilen får ikke en oppdiktet kroneverdi.</p></div>
         <div className="party-list">{documentedResults.map((result, index) => renderResultCard(result, index))}</div>
-        {unclearResults.length > 0 && <div className="unclear-section"><div className="section-heading"><AlertTriangle /><div><h2>Uavklarte estimater</h2><p>Disse vises for å gi informasjon, men kan ikke vinne rangeringen.</p></div></div><div className="party-list">{unclearResults.map(result => renderResultCard(result))}</div></div>}
-        <div className="bottom-actions"><button className="secondary" onClick={() => navigate('form')}>Endre opplysninger</button><button className="primary" onClick={() => navigate('receipt')}>Se budsjettfordeling <ArrowRight size={17} /></button></div>
+        {unclearResults.length > 0 && <div className="unclear-section"><div className="section-heading"><AlertTriangle /><div><h2>Uavklarte eller delvise estimater</h2><p>Alle partiene vises, men disse kan ikke vinne rangeringen før nødvendige satser er klare.</p></div></div><div className="party-list">{unclearResults.map(result => renderResultCard(result))}</div></div>}
+        <div className="bottom-actions"><button className="secondary" onClick={() => navigate('form')}>Endre opplysninger</button><button className="primary" onClick={() => navigate('receipt')}>Se skattekvittering <ArrowRight size={17} /></button></div>
       </section>}
 
       {view === 'receipt' && <section className="receipt-page">
-        <div className="page-heading"><span className="eyebrow">Budsjettfordeling</span><h1>Hva brukes fellesskapets penger på?</h1><p>Velg et parti. Vi viser aldri konstruerte partiforskjeller som om de var fakta.</p></div>
-        <div className="budget-selector"><button className={budgetPartyId === 'current' ? 'active' : ''} onClick={() => setBudgetPartyId('current')}>Dagens fordeling</button>{parties.map(party => <button key={party.id} className={budgetPartyId === party.id ? 'active' : ''} onClick={() => setBudgetPartyId(party.id)}>{party.shortName}</button>)}</div>
-        <div className="tax-total"><span>Din beregnede skatt etter vedtatte 2026-regler</span><strong>{kr(baselineTax.total)}</strong><small>Skatteberegningen er separat fra den foreløpige budsjettgrafikken.</small></div>
-        {selectedBudget ? <div className="budget-comparison"><div className="budget-visual"><div className="donut" style={{ background: `conic-gradient(${selectedBudget.map((item, index) => { const start = selectedBudget.slice(0, index).reduce((sum, entry) => sum + entry.percent, 0); return `${item.color} ${start}% ${start + item.percent}%` }).join(',')})` }}><div><strong>100 %</strong><span>Foreløpig gruppering</span></div></div><span className="estimate-pill">IKKE OFFISIELL STATSKONTO</span></div><div className="budget-table">{currentBudget.map(item => <div className="budget-row" key={item.name}><span><i style={{ background: item.color }} />{item.name}</span><strong>{formatPercent(item.percent)}</strong></div>)}</div></div> : <div className="budget-empty"><AlertTriangle /><h2>{selectedParty?.name}: ikke ferdig normalisert</h2><p>Partiets alternative statsbudsjett finnes, men utgiftene er ennå ikke omregnet til samme kategorier og prosenter. Derfor viser vi ingen oppdiktet fordeling.</p><a href={selectedParty?.sourceUrl} target="_blank" rel="noreferrer">Åpne partiets kilde <ExternalLink size={14} /></a></div>}
-        <div className="notice"><ShieldCheck /><div><strong>Hvorfor er partivisningen tom?</strong><p>Alternative budsjetter bruker ulike tabeller og kategorier. Før de kan sammenlignes må alle beløp normaliseres mot samme statsbudsjettgrunnlag. Dette påvirker ikke skatteberegningen.</p></div></div>
+        <div className="page-heading"><span className="eyebrow">Skattekvittering og budsjettfordeling</span><h1>Hva vil partiet bruke pengene på?</h1><p>Velg parti. Konkrete årsbudsjett og langsiktige programmål vises hver for seg.</p></div>
+        <div className="budget-selector"><button className={budgetPartyId === 'current' ? 'active' : ''} onClick={() => setBudgetPartyId('current')}>Dagens budsjett</button>{parties.map(party => <button key={party.id} className={budgetPartyId === party.id ? 'active' : ''} onClick={() => setBudgetPartyId(party.id)}>{party.shortName}</button>)}</div>
+        <div className="tax-total"><span>{budgetPartyId === 'current' ? 'Din skatt etter vedtatte 2026-regler' : `Din beregnede skatt med ${selectedBudget.label}`}</span><strong>{kr(receiptTax.total)}</strong><small>Under fordeles beløpet etter det valgte budsjettets forenklede utgiftsandeler.</small></div>
+        <div className="budget-size"><div><span>Anslått størrelse på statsbudsjettet</span><strong>{numberWithSpaces(selectedBudgetTotal)}</strong><small>Dagens nivå = 100</small></div><div><span>Forskjell fra dagens nivå</span><strong className={selectedBudgetTotal > 100 ? 'budget-up' : selectedBudgetTotal < 100 ? 'budget-down' : ''}>{selectedBudgetTotal > 100 ? '+' : ''}{formatPercent(selectedBudgetTotal - 100)}</strong><small>{selectedBudget.confidence === 'grouped-baseline' ? 'Forenklet gruppert grunnlinje' : selectedBudget.confidence === 'very-uncertain' ? 'Svært usikkert programestimat' : 'Forenklet retningsestimat'}</small></div><p>{selectedBudget.note}</p></div>
+        <div className="budget-comparison"><div className="budget-visual"><div className="donut" style={{ background: `conic-gradient(${selectedBudget.items.map((item, index) => { const start = selectedBudget.items.slice(0, index).reduce((sum, entry) => sum + budgetShare(selectedBudget, entry), 0); const share = budgetShare(selectedBudget, item); return `${item.color} ${start}% ${start + share}%` }).join(',')})` }}><div><strong>100 %</strong><span>av valgt budsjett</span></div></div><span className={selectedBudget.confidence === 'grouped-baseline' ? 'verified-pill' : 'estimate-pill'}>{selectedBudget.confidence === 'grouped-baseline' ? 'FORENKLET GRUNNLINJE' : 'TYDELIG MERKET ESTIMAT'}</span></div><div className="budget-table"><div className="budget-table-head"><span>Område</span><span>Andel</span><span>Din skatt</span><span>Indeksdiff.</span></div>{selectedBudget.items.map(item => { const share = budgetShare(selectedBudget, item); const currentItem = currentBudget.find(entry => entry.id === item.id); const difference = item.amount - (currentItem?.amount ?? 0); return <div className="budget-row" key={item.id}><span><i style={{ background: item.color }} />{item.name}</span><strong>{formatPercent(share)}</strong><strong>{kr(receiptTax.total * share / 100)}</strong><small className={difference > 0 ? 'budget-up' : difference < 0 ? 'budget-down' : ''}>{difference > 0 ? '+' : ''}{new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 1 }).format(difference)}</small></div>})}</div></div>
+        <div className="budget-basis"><article><span>Konkret grunnlag</span><h3>{selectedBudget.budgetTitle}</h3><p>Dette grunnlaget brukes for retningen i 2026-visningen.</p><a href={selectedBudget.budgetUrl} target="_blank" rel="noreferrer">Åpne budsjettkilden <ExternalLink size={13} /></a></article><article><span>Langsiktig program</span><h3>{selectedBudget.programTitle}</h3><p>{selectedBudget.longTermGoal}</p><a href={selectedBudget.programUrl} target="_blank" rel="noreferrer">Åpne partiprogrammet <ExternalLink size={13} /></a></article></div>
+        <div className="notice"><ShieldCheck /><div><strong>Prosentene og budsjettstørrelsen er forenklede</strong><p>Alternative budsjetter bruker ulike tabeller og kategorier. Appen viser derfor en sammenlignbar retningsmodell, ikke et offisielt statsregnskap. Totalindeksen gjør samtidig synlig at partiene kan ønske et større eller mindre budsjett enn dagens.</p></div></div>
       </section>}
 
       {view === 'method' && <section className="method-page">
         <div className="page-heading"><span className="eyebrow">Åpen metode</span><h1>Slik regner appen</h1><p>Samme profil og beregningsmotor brukes for alle partier.</p></div>
-        <div className="method-grid"><article><b>1</b><h3>Vedtatte regler</h3><p>2026-reglene er grunnlinjen: 22 % skatt på alminnelig inntekt, progressive skattetrinn, trygdeavgift og faktiske fradragsgrenser.</p></article><article><b>2</b><h3>Partiets tall</h3><p>Personfradrag, trinn, satser og konkrete skattefradrag erstattes med partiets dokumenterte forslag.</p></article><article><b>3</b><h3>Nøytral sortering</h3><p>Lavest beregnet skatt kommer øverst. Uavklarte estimater vises i en egen, ikke-rangert del.</p></article></div>
-        <div className="method-copy"><h2>Hva beregnes?</h2><p>Modellen tar med lønn eller trygd, pensjon, skattepliktig utleie, personfradrag, minstefradrag, renteutgifter, valgte standardfradrag, trinnskatt, trygdeavgift og en forenklet formuesskatt. For pensjon brukes også skattefradraget for pensjonsinntekt.</p><h2>Hva er foreløpig utenfor?</h2><p>Kommunale forskjeller, ektefellefordeling, den tilfeldige forsøksordningen med arbeidsfradrag for unge, detaljert skatt på aksjeutbytte og alle forbruksavgifter er ikke med. Tjenester og ytelser tas bare med når de kan knyttes til konkrete vilkår og beløp.</p><h2>Kontrollpunkt: 130 000 kr i lønn</h2><p>Med ingen annen inntekt gir vedtatte 2026-regler omtrent 7 588 kr i trygdeavgift og ingen alminnelig inntektsskatt eller trinnskatt. Dette er lagt inn som automatisk test.</p><a className="source-link" href="https://www.regjeringen.no/no/tema/okonomi-og-budsjett/skatter-og-avgifter/skatte-og-avgiftssatser/skattesatser-2026/id3121978/" target="_blank" rel="noreferrer">Finansdepartementets vedtatte skattesatser 2026 <ExternalLink size={13} /></a><br /><button className="secondary" onClick={() => { setProfile(defaultProfile); setStep(0); navigate('form') }}><RotateCcw size={16} /> Nullstill opplysninger</button></div>
+        <div className="method-grid"><article><b>1</b><h3>Vedtatte regler</h3><p>2026-reglene er grunnlinjen: personfradrag, minstefradrag, progressive skattetrinn, trygdeavgift og formuesskatt.</p></article><article><b>2</b><h3>Partiets årsbudsjett</h3><p>Konkrete fradrag, satser, trinn og verdsettelsesregler erstatter dagens regler der partiet har oppgitt tall.</p></article><article><b>3</b><h3>Nøytral sortering</h3><p>Lavest beregnet skatt kommer øverst. Uavklarte estimater vises under partiene med konkrete beregninger.</p></article></div>
+        <div className="method-copy"><h2>Flere inntekter</h2><p>Lønn, ENK, pensjon, NAV-ytelser, annen inntekt og utleie kan kombineres. De behandles etter ulike skatteregler og slås først sammen etter at hver type er klassifisert.</p><h2>Utleie</h2><p>Skattefri utleie påvirker ikke skatten. Ved privat skattepliktig utleie skattlegges overskuddet normalt som alminnelig inntekt, mens fradragsberettiget underskudd kan redusere annen alminnelig inntekt. Påkostning gir ikke direkte fradrag. Næringsutleie beregnes som næringsinntekt.</p><h2>Forenklet formue</h2><p>Primærbolig, sekundærbolig, fritidsbolig, bank, aksjer, driftsmidler og annen formue får egne verdsettelsesregler. Gjeld trekkes forenklet fra samlet skattemessig formue. Resultatet er et estimat, ikke en skattemelding.</p><h2>Budsjettfordeling</h2><p>Årsbudsjettet og partiprogrammet vises separat. Fordelingen normaliseres til felles kategorier, mens en egen indeks viser om partiet anslås å ville ha et større eller mindre totalbudsjett.</p><h2>Kontrollpunkt: 130 000 kr i lønn</h2><p>Med ingen annen inntekt gir vedtatte 2026-regler omtrent 7 588 kr i trygdeavgift og ingen alminnelig inntektsskatt eller trinnskatt. Dette kontrolleres automatisk.</p><a className="source-link" href="https://www.regjeringen.no/no/tema/okonomi-og-budsjett/skatter-og-avgifter/skatte-og-avgiftssatser/skattesatser-2026/id3121978/" target="_blank" rel="noreferrer">Finansdepartementets vedtatte skattesatser 2026 <ExternalLink size={13} /></a><br /><button className="secondary" onClick={() => { setProfile(defaultProfile); setStep(0); navigate('form') }}><RotateCcw size={16} /> Nullstill opplysninger</button></div>
       </section>}
     </main>
 
